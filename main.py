@@ -7,6 +7,8 @@ import urllib.parse
 DATA_URL = "https://github.com/meganii/sandbox-github-actions-scheduler/releases/download/2025-09-21/pages.parquet"
 
 # キャッシュして同じクエリを何度も叩かないようにする
+
+
 @st.cache_data(show_spinner=False)
 def run_query(data_url: str, search_word: str):
     # シングルクオートをエスケープして安全に埋め込む
@@ -77,12 +79,14 @@ def run_query(data_url: str, search_word: str):
     finally:
         con.close()
 
+
 def main():
     st.set_page_config(page_title="Parquet 検索 (DuckDB + Streamlit)")
     st.title("Parquet 検索アプリ")
     st.write("`pages.parquet` の中から、**指定した語を含むテキスト塊**を抽出します。")
 
-    search_word = st.text_input("検索ワード（部分一致）", value="[meganii.icon]", key="search_word")
+    search_word = st.text_input(
+        "検索ワード（部分一致）", value="[meganii.icon]", key="search_word")
     run_button = st.button("検索実行", key="run_button")
 
     # 検索結果と検索語をセッションに保持（key競合を避けるためlast_search_wordを使用）
@@ -99,7 +103,8 @@ def main():
                 st.session_state['last_search_word'] = search_word
             except Exception as e:
                 st.error(f"エラーが発生しました: {e}")
-                st.markdown("**補足**: DuckDB が HTTP 経由で Parquet を読み込めない環境の場合は、ファイルをローカルにダウンロードして `DATA_URL` をローカルパスに置き換えてください。")
+                st.markdown(
+                    "**補足**: DuckDB が HTTP 経由で Parquet を読み込めない環境の場合は、ファイルをローカルにダウンロードして `DATA_URL` をローカルパスに置き換えてください。")
 
     df = st.session_state.get('search_df', None)
     if df is not None:
@@ -107,33 +112,38 @@ def main():
         if len(df) == 0:
             st.info("該当するテキストは見つかりませんでした。検索ワードを変えて再試行してください。")
         else:
-            filter_word = st.text_input("テキスト内絞り込み（空欄で全件表示）", value="", key="filter_word")
+            filter_word = st.text_input(
+                "テキスト内絞り込み（空欄で全件表示）", value="", key="filter_word")
             filtered_rows = []
             for _, row in df.iterrows():
                 text_lines = row['text_block'].split('\n')
                 if filter_word:
-                    filtered_lines = [line for line in text_lines if filter_word in line]
+                    # 1行でもキーワードが含まれていればカードごと表示
+                    if any(filter_word in line for line in text_lines):
+                        filtered_rows.append((row['title'], text_lines))
                 else:
-                    filtered_lines = text_lines
-                if len(filtered_lines) > 0:
-                    filtered_rows.append((row['title'], filtered_lines))
+                    filtered_rows.append((row['title'], text_lines))
             if len(filtered_rows) == 0:
                 st.info("絞り込み条件に一致するテキストはありませんでした。キーワードを変えて再試行してください。")
-            for title, filtered_lines in filtered_rows:
+            for title, all_lines in filtered_rows:
                 with st.container():
-                    st.markdown(f"[{title}](https://scrapbox.io/villagepump/{urllib.parse.quote(title)})", unsafe_allow_html=True)
-                    filtered_text = '\n'.join(filtered_lines)
-                    if len(filtered_lines) > 20:
-                        with st.expander(f"{len(filtered_lines)} 行（クリックで展開）", expanded=False):
-                            st.markdown(f"<div style='border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; white-space:pre-wrap;'>{filtered_text}</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"[{title}](https://scrapbox.io/villagepump/{urllib.parse.quote(title)})", unsafe_allow_html=True)
+                    full_text = '\n'.join(all_lines)
+                    if len(all_lines) > 20:
+                        with st.expander(f"{len(all_lines)} 行（クリックで展開）", expanded=False):
+                            st.markdown(
+                                f"<div style='border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; white-space:pre-wrap;'>{full_text}</div>", unsafe_allow_html=True)
                     else:
-                        st.markdown(f"<div style='border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; white-space:pre-wrap;'>{filtered_text}</div>", unsafe_allow_html=True)
+                        st.markdown(
+                            f"<div style='border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; white-space:pre-wrap;'>{full_text}</div>", unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("**使い方メモ**")
     st.markdown("- 「検索ワード」に部分一致で探したい文字列を入力して「検索実行」を押してください。")
     st.markdown("- 初期値は `[meganii.icon]` です。")
     st.markdown("- もし `duckdb` の環境が HTTP/HTTPS の読み込みをサポートしていない場合は、ローカルに `pages.parquet` を置き、`DATA_URL` をローカルファイルパス（例: `/path/to/pages.parquet`）に変更してください。")
+
 
 if __name__ == "__main__":
     main()
