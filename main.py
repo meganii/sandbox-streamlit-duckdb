@@ -1,0 +1,139 @@
+# main.py
+import streamlit as st
+import duckdb
+import urllib.parse
+
+
+DATA_URL = "https://github.com/meganii/sandbox-github-actions-scheduler/releases/download/2025-09-21/pages.parquet"
+
+# キャッシュして同じクエリを何度も叩かないようにする
+@st.cache_data(show_spinner=False)
+def run_query(data_url: str, search_word: str):
+    # シングルクオートをエスケープして安全に埋め込む
+    url_escaped = data_url.replace("'", "''")
+
+    sql = f"""
+    -- 一時テーブルに展開
+    CREATE TEMP TABLE expanded_lines AS
+    SELECT 
+        t.id              AS page_id,
+        t.title,
+        u.ord             AS line_no,
+        l.created,
+        l.id              AS line_id,
+        l.text,
+        l.updated,
+        l.userId
+    FROM read_parquet('{url_escaped}') t
+    CROSS JOIN UNNEST(t.lines) WITH ORDINALITY AS u(l, ord);
+
+    WITH
+      line_blocks AS (
+        SELECT
+          *,
+          SUM(CASE WHEN "text" = '' THEN 1 ELSE 0 END) OVER (
+            PARTITION BY
+              page_id
+            ORDER BY
+              line_no
+          ) AS block_id
+        FROM
+          expanded_lines
+      ),
+      target_blocks AS (
+        SELECT DISTINCT
+          page_id,
+          block_id
+        FROM
+          line_blocks
+        WHERE
+          "text" LIKE '%' || ? || '%'
+      )
+
+    SELECT
+        lb.page_id,
+        lb.title,
+        STRING_AGG(lb."text", '\n' ORDER BY lb.line_no) AS text_block
+    FROM
+        line_blocks AS lb
+        INNER JOIN target_blocks AS tb ON lb.page_id = tb.page_id
+        AND lb.block_id = tb.block_id
+    WHERE
+        lb."text" != ''
+    GROUP BY
+        lb.page_id,
+        lb.title,
+        lb.block_id
+    ORDER BY
+        lb.page_id,
+        lb.block_id;
+    """
+
+    con = duckdb.connect()
+    try:
+        # 検索ワードは最後のステートメント内でしかパラメータ化しないので安全
+        df = con.execute(sql, [search_word]).fetchdf()
+        return df
+    finally:
+        con.close()
+
+def main():
+    st.set_page_config(page_title="Parquet 検索 (DuckDB + Streamlit)")
+    st.title("Parquet 検索アプリ")
+    st.write("`pages.parquet` の中から、**指定した語を含むテキスト塊**を抽出します。")
+
+    search_word = st.text_input("検索ワード（部分一致）", value="[meganii.icon]", key="search_word")
+    run_button = st.button("検索実行", key="run_button")
+
+    # 検索結果と検索語をセッションに保持（key競合を避けるためlast_search_wordを使用）
+    if 'search_df' not in st.session_state:
+        st.session_state['search_df'] = None
+    if 'last_search_word' not in st.session_state:
+        st.session_state['last_search_word'] = search_word
+
+    if run_button:
+        with st.spinner("DuckDB を実行中..."):
+            try:
+                df = run_query(DATA_URL, search_word)
+                st.session_state['search_df'] = df
+                st.session_state['last_search_word'] = search_word
+            except Exception as e:
+                st.error(f"エラーが発生しました: {e}")
+                st.markdown("**補足**: DuckDB が HTTP 経由で Parquet を読み込めない環境の場合は、ファイルをローカルにダウンロードして `DATA_URL` をローカルパスに置き換えてください。")
+
+    df = st.session_state.get('search_df', None)
+    if df is not None:
+        st.success(f"検索完了（{len(df)} 行が見つかりました）")
+        if len(df) == 0:
+            st.info("該当するテキストは見つかりませんでした。検索ワードを変えて再試行してください。")
+        else:
+            filter_word = st.text_input("テキスト内絞り込み（空欄で全件表示）", value="", key="filter_word")
+            filtered_rows = []
+            for _, row in df.iterrows():
+                text_lines = row['text_block'].split('\n')
+                if filter_word:
+                    filtered_lines = [line for line in text_lines if filter_word in line]
+                else:
+                    filtered_lines = text_lines
+                if len(filtered_lines) > 0:
+                    filtered_rows.append((row['title'], filtered_lines))
+            if len(filtered_rows) == 0:
+                st.info("絞り込み条件に一致するテキストはありませんでした。キーワードを変えて再試行してください。")
+            for title, filtered_lines in filtered_rows:
+                with st.container():
+                    st.markdown(f"[{title}](https://scrapbox.io/villagepump/{urllib.parse.quote(title)})", unsafe_allow_html=True)
+                    filtered_text = '\n'.join(filtered_lines)
+                    if len(filtered_lines) > 20:
+                        with st.expander(f"{len(filtered_lines)} 行（クリックで展開）", expanded=False):
+                            st.markdown(f"<div style='border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; white-space:pre-wrap;'>{filtered_text}</div>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"<div style='border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; white-space:pre-wrap;'>{filtered_text}</div>", unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("**使い方メモ**")
+    st.markdown("- 「検索ワード」に部分一致で探したい文字列を入力して「検索実行」を押してください。")
+    st.markdown("- 初期値は `[meganii.icon]` です。")
+    st.markdown("- もし `duckdb` の環境が HTTP/HTTPS の読み込みをサポートしていない場合は、ローカルに `pages.parquet` を置き、`DATA_URL` をローカルファイルパス（例: `/path/to/pages.parquet`）に変更してください。")
+
+if __name__ == "__main__":
+    main()
