@@ -4,10 +4,7 @@ import duckdb
 import urllib.parse
 
 
-DATA_URL = "https://github.com/meganii/sandbox-github-actions-scheduler/releases/download/2025-09-21/pages.parquet"
-
-# キャッシュして同じクエリを何度も叩かないようにする
-
+DATA_URL = "https://github.com/meganii/sandbox-github-actions-scheduler/releases/latest/download/pages.parquet"
 
 @st.cache_data(show_spinner=False)
 def run_query(data_url: str, search_word: str):
@@ -20,12 +17,13 @@ def run_query(data_url: str, search_word: str):
     SELECT 
         t.id              AS page_id,
         t.title,
+        t.created,
         u.ord             AS line_no,
-        l.created,
+        l.created         AS line_created,
         l.id              AS line_id,
         l.text,
-        l.updated,
-        l.userId
+        l.updated         AS line_updated,
+        l.userId          AS line_userId
     FROM read_parquet('{url_escaped}') t
     CROSS JOIN UNNEST(t.lines) WITH ORDINALITY AS u(l, ord);
 
@@ -55,6 +53,7 @@ def run_query(data_url: str, search_word: str):
     SELECT
         lb.page_id,
         lb.title,
+        lb.created,
         STRING_AGG(lb."text", '\n' ORDER BY lb.line_no) AS text_block
     FROM
         line_blocks AS lb
@@ -65,8 +64,10 @@ def run_query(data_url: str, search_word: str):
     GROUP BY
         lb.page_id,
         lb.title,
+        lb.created,
         lb.block_id
     ORDER BY
+        lb.created DESC,
         lb.page_id,
         lb.block_id;
     """
@@ -142,8 +143,7 @@ def main():
     st.markdown("**使い方メモ**")
     st.markdown("- 「検索ワード」に部分一致で探したい文字列を入力して「検索実行」を押してください。")
     st.markdown("- 初期値は `[meganii.icon]` です。")
-    st.markdown("- もし `duckdb` の環境が HTTP/HTTPS の読み込みをサポートしていない場合は、ローカルに `pages.parquet` を置き、`DATA_URL` をローカルファイルパス（例: `/path/to/pages.parquet`）に変更してください。")
-
+    st.markdown("- 検索結果が多い場合は、下の「テキスト内絞り込み」にさらにキーワードを入れて絞り込めます。")
 
 if __name__ == "__main__":
     main()
