@@ -82,7 +82,7 @@ def run_query(data_url: str, search_word: str):
 
 
 def main():
-    st.set_page_config(page_title="Parquet 検索 (DuckDB + Streamlit)")
+    st.set_page_config(page_title="井戸端クライン検索 (DuckDB + Streamlit)")
     st.title("井戸端クライン検索")
     st.write("ctrl + iでアイコンを付けて言及したクライン（空行で区切られたテキストの塊）を検索する。")
 
