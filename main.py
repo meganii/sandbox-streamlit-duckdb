@@ -28,48 +28,63 @@ def run_query(data_url: str, search_word: str):
     CROSS JOIN UNNEST(t.lines) WITH ORDINALITY AS u(l, ord);
 
     WITH
-      line_blocks AS (
+    line_blocks AS (
         SELECT
-          *,
-          SUM(CASE WHEN "text" = '' THEN 1 ELSE 0 END) OVER (
+        *,
+        SUM(CASE WHEN "text" = '' THEN 1 ELSE 0 END) OVER (
             PARTITION BY
-              page_id
+            page_id
             ORDER BY
-              line_no
-          ) AS block_id
+            line_no
+        ) AS block_id
         FROM
-          expanded_lines
-      ),
-      target_blocks AS (
+        expanded_lines
+    ),
+    target_blocks AS (
         SELECT DISTINCT
-          page_id,
-          block_id
+            page_id,
+            block_id
         FROM
-          line_blocks
+            line_blocks
         WHERE
-          "text" LIKE '%' || ? || '%'
-      )
+            "text" LIKE '%' || ? || '%'
+    ),
+    -- 元のgrouped_text_blockを、よりシンプルな形に変更
+    block_contents AS (
+        SELECT
+            lb.page_id,
+            lb.title,
+            lb.block_id, -- 集約のキーとして利用
+            lb.line_no,
+            lb.line_id,
+            lb."text",
+            lb.line_updated AS updated
+        FROM
+            line_blocks AS lb
+            INNER JOIN target_blocks AS tb ON lb.page_id = tb.page_id
+            AND lb.block_id = tb.block_id
+        WHERE
+            lb."text" != ''
+    )
 
+    -- 最終的なSELECT文で、ブロックごとに集約
     SELECT
-        lb.page_id,
-        lb.title,
-        lb.created,
-        STRING_AGG(lb."text", '\n' ORDER BY lb.line_no) AS text_block
+        page_id,
+        title,
+        -- 各ブロックの先頭行のline_idを取得
+        arg_min(line_id, line_no) AS first_line_id,
+        -- ブロック内のテキストを改行で連結
+        string_agg("text", '\n' ORDER BY line_no) AS block_text,
+        max(updated) AS updated
     FROM
-        line_blocks AS lb
-        INNER JOIN target_blocks AS tb ON lb.page_id = tb.page_id
-        AND lb.block_id = tb.block_id
-    WHERE
-        lb."text" != ''
+        block_contents
     GROUP BY
-        lb.page_id,
-        lb.title,
-        lb.created,
-        lb.block_id
+        page_id,
+        title,
+        block_id
     ORDER BY
-        lb.created DESC,
-        lb.page_id,
-        lb.block_id;
+        max(updated) DESC,
+        page_id
     """
 
     con = duckdb.connect()
@@ -117,19 +132,19 @@ def main():
                 "テキスト内絞り込み（空欄で全件表示）", value="", key="filter_word")
             filtered_rows = []
             for _, row in df.iterrows():
-                text_lines = row['text_block'].split('\n')
+                text_lines = row['block_text'].split('\n')
                 if filter_word:
                     # 1行でもキーワードが含まれていればカードごと表示
                     if any(filter_word in line for line in text_lines):
-                        filtered_rows.append((row['title'], text_lines))
+                        filtered_rows.append((row['title'], row['first_line_id'], text_lines))
                 else:
-                    filtered_rows.append((row['title'], text_lines))
+                    filtered_rows.append((row['title'], row['first_line_id'], text_lines))
             if len(filtered_rows) == 0:
                 st.info("絞り込み条件に一致するテキストはありませんでした。キーワードを変えて再試行してください。")
-            for title, all_lines in filtered_rows:
+            for title, first_line_id, all_lines in filtered_rows:
                 with st.container():
                     st.markdown(
-                        f"[{title}](https://scrapbox.io/villagepump/{urllib.parse.quote(title)})", unsafe_allow_html=True)
+                        f"[{title}](https://scrapbox.io/villagepump/{urllib.parse.quote(title)}#{first_line_id})", unsafe_allow_html=True)
                     full_text = '\n'.join(all_lines)
                     if len(all_lines) > 20:
                         with st.expander(f"{len(all_lines)} 行（クリックで展開）", expanded=False):
