@@ -2,7 +2,10 @@
 import streamlit as st
 import duckdb
 import urllib.parse
+import json
+import re
 
+pattern = re.compile(r"\[([^\]]+?)\.icon(?:\*(\d+))?\]")
 
 DATA_URL = "https://github.com/meganii/sandbox-github-actions-scheduler/releases/latest/download/pages.parquet"
 
@@ -95,6 +98,19 @@ def run_query(data_url: str, search_word: str):
     finally:
         con.close()
 
+with open("icons.json", "r") as f:
+    icons = json.load(f)
+
+def replace_icon(match):
+    key = match.group(1)
+    count = int(match.group(2)) if match.group(2) else 1
+    if key in icons:
+        img_tag = f'<img src="{icons[key]}" alt="{key}" width="20" style="vertical-align:middle;">'
+        return img_tag * count
+    return match.group(0)
+
+def convert_text(text: str) -> str:
+    return pattern.sub(replace_icon, text)
 
 def main():
     st.set_page_config(page_title="井戸端クライン検索 (DuckDB + Streamlit)")
@@ -149,10 +165,10 @@ def main():
                     if len(all_lines) > 20:
                         with st.expander(f"{len(all_lines)} 行（クリックで展開）", expanded=False):
                             st.markdown(
-                                f"<div style='border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; white-space:pre-wrap;'>{full_text}</div>", unsafe_allow_html=True)
+                                f"<div style='border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; white-space:pre-wrap;'>{convert_text(full_text)}</div>", unsafe_allow_html=True)
                     else:
                         st.markdown(
-                            f"<div style='border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; white-space:pre-wrap;'>{full_text}</div>", unsafe_allow_html=True)
+                            f"<div style='border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; white-space:pre-wrap;'>{convert_text(full_text)}</div>", unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("**使い方メモ**")
