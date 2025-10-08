@@ -1,7 +1,7 @@
 # main.py
 import streamlit as st
 import duckdb
-import urllib.parse
+import urllib.request
 import json
 import re
 
@@ -9,27 +9,32 @@ pattern = re.compile(r"\[([^\]]+?)\.icon(?:\*(\d+))?\]")
 
 DATA_URL = "https://github.com/meganii/sandbox-github-actions-scheduler/releases/latest/download/pages.parquet"
 
-@st.cache_data(show_spinner=False)
-def run_query(data_url: str, search_word: str):
-    # シングルクオートをエスケープして安全に埋め込む
-    url_escaped = data_url.replace("'", "''")
-
+@st.cache_resource
+def init_duckdb():
+    urllib.request.urlretrieve(DATA_URL, "pages.parquet")
+    con = duckdb.connect('app.duckdb')
     sql = f"""
-    -- 一時テーブルに展開
-    CREATE TEMP TABLE expanded_lines AS
-    SELECT 
-        t.id              AS page_id,
-        t.title,
-        t.created,
-        u.ord             AS line_no,
-        l.created         AS line_created,
-        l.id              AS line_id,
-        l.text,
-        l.updated         AS line_updated,
-        l.userId          AS line_userId
-    FROM read_parquet('{url_escaped}') t
-    CROSS JOIN UNNEST(t.lines) WITH ORDINALITY AS u(l, ord);
+        -- 一時テーブルに展開
+        CREATE TEMP TABLE expanded_lines AS
+        SELECT 
+            t.id              AS page_id,
+            t.title,
+            t.created,
+            u.ord             AS line_no,
+            l.created         AS line_created,
+            l.id              AS line_id,
+            l.text,
+            l.updated         AS line_updated,
+            l.userId          AS line_userId
+        FROM read_parquet('pages.parquet') t
+        CROSS JOIN UNNEST(t.lines) WITH ORDINALITY AS u(l, ord);
+    """
+    con.execute(sql)
+    return con
 
+# @st.cache_data(show_spinner=False)
+def run_query(con, search_word: str):
+    sql = f"""
     WITH
     line_blocks AS (
         SELECT
@@ -89,14 +94,8 @@ def run_query(data_url: str, search_word: str):
         max(updated) DESC,
         page_id
     """
-
-    con = duckdb.connect()
-    try:
-        # 検索ワードは最後のステートメント内でしかパラメータ化しないので安全
-        df = con.execute(sql, [search_word]).fetchdf()
-        return df
-    finally:
-        con.close()
+    df = con.execute(sql, [search_word]).fetchdf()
+    return df
 
 with open("icons.json", "r") as f:
     icons = json.load(f)
@@ -117,6 +116,8 @@ def main():
     st.title("井戸端クライン検索")
     st.write("ctrl + iでアイコンを付けて言及したクライン（空行で区切られたテキストの塊）を検索する。")
 
+    con = init_duckdb()
+
     search_word = st.text_input(
         "検索ワード（部分一致）", value="[meganii.icon]", key="search_word")
     run_button = st.button("検索実行", key="run_button")
@@ -130,7 +131,7 @@ def main():
     if run_button:
         with st.spinner("DuckDB を実行中..."):
             try:
-                df = run_query(DATA_URL, search_word)
+                df = run_query(con, search_word)
                 st.session_state['search_df'] = df
                 st.session_state['last_search_word'] = search_word
             except Exception as e:
